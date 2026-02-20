@@ -7,10 +7,37 @@ experiment:
     - 999
 
 grammar:
-  kind: balanced_parentheses
-  sample_count: 120
-  max_depth: 6
-  max_length: 40
+  # 3-5 families in this version.
+  families: 4
 
-output:
-  include_metadata: true
+  # Total clips generated per harness run seed.
+  sample_count: 160
+
+  # Phrase structure.
+  phrase_bars: 4
+  motifs_per_family: 10
+
+  # Tempo controls.
+  tempo_min: 82.0
+  tempo_max: 138.0
+  tempo_ramp_max: 0.08
+
+  # Microtiming and timing controls.
+  swing_min: 0.00
+  swing_max: 0.30
+  jitter_ms_min: 1.0
+  jitter_ms_max: 12.0
+  push_pull_min: -0.03
+  push_pull_max: 0.03
+
+  # Density and variation.
+  density_min: 0.25
+  density_max: 0.75
+  ghost_probability: 0.35
+  fill_probability_min: 0.05
+  fill_probability_max: 0.28
+  dropout_min: 0.00
+  dropout_max: 0.20
+
+  # Timbre variants for metadata logging.
+  instrument_timbre_variants: 3

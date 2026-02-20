@@ -1,3 +1,5 @@
-h_generate_valid_rate: ">=0.95"
-h_generate_mean_length: ">=4.0"
-h_generate_entropy: ">=1.5"
+h_generate_valid_rate: ">=0.99"
+h_generate_event_density: ">=0.04"
+h_generate_event_entropy: ">=1.4"
+h_generate_motif_reuse: ">=0.12"
+h_generate_family_coverage: ">=0.75"
