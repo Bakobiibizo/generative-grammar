@@ -1,0 +1,16 @@
+experiment:
+  seed_list:
+    - 42
+    - 123
+    - 321
+    - 777
+    - 999
+
+grammar:
+  kind: balanced_parentheses
+  sample_count: 120
+  max_depth: 6
+  max_length: 40
+
+output:
+  include_metadata: true

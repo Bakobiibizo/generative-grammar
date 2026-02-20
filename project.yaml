@@ -1,0 +1,20 @@
+name: generative-grammar
+version: "0.1.0"
+description: >
+  Synthetic data generators for grammar-constrained sequence benchmarks.
+
+experiments:
+  - id: grammar_generator_suite
+    module: experiments.generators
+    callable: run
+    description: Generate synthetic samples from simple grammars.
+
+config:
+  default: configs/default.yaml
+
+datasets: []
+
+outputs:
+  format: parquet
+
+thresholds: thresholds/generators.yaml
