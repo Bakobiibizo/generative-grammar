@@ -8,3 +8,11 @@ output/
 data/
 *.parquet
 *.jsonl
+dist/
+build/
+*.egg-info/
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+corpus/

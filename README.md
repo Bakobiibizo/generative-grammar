@@ -1,54 +1,48 @@
 # Generative Grammar
 
-Lightweight rhythm-corpus generator project for test-data synthesis.
+A reproducible, grammar-controlled rhythm corpus generator. It creates hierarchical
+motif, bar, and phrase metadata plus deterministic WAV previews for test-data synthesis,
+benchmarking, and controlled music-model experiments.
 
-## Design
+## Install and run
 
-Each generated clip is controlled by a small latent control set that is logged and
-held constant per clip, but never provided as training inputs. The generator combines:
-
-- Family-level templates (`straight_rock`, `syncopated_funk`, `minimal_techno`, `jazz_swing`)
-- Motif library per family
-- Motif sequencing rules (hierarchical structure: motifs -> bars -> phrases)
-- Microtiming knobs (swing, jitter, push/pull)
-- Accent and density knobs
-- Timbre metadata profiles
-
-## Latent knobs per clip
-
-- family
-- motif sequence
-- tempo start/end
-- swing
-- microtiming jitter
-- push/pull
-- density
-- fill probability
-- instrumental dropout
-- accent profile
-- timbre profile
-
-## Outputs
-
-For each seed, the run writes:
-
-- `rhythm_samples_seed_<seed>.parquet`
-
-Columns include:
-- `seed`, `sample_idx`, `family`, `family_id`
-- timing knobs (`tempo_start_bpm`, `tempo_end_bpm`, `swing`, ...)
-- `motif_ids`, `beat_patterns`, `accent_profile`, `timbre_profile`
-- `events_json` with per-event timing and velocity metadata
-- `event_count`, `valid`
-
-## Run
-
-From repo root:
+Python 3.10 or newer is required.
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run harness run --project projects/generative-grammar --seed 42
+pip install .
+generative-grammar --seed 42 --config configs/default.yaml --output-dir corpus/seed-42
 ```
 
-## License
+The command writes a versioned Parquet corpus, one mono PCM WAV preview per clip, and
+`manifest.json` with the seed, evaluation results, and SHA-256 hashes. The default run
+produces 160 four-bar clips. Repeating a run with the same release, configuration, and
+seed produces byte-identical artifacts.
 
-MIT. See `LICENSE`.
+The existing research-harness contract remains available:
+
+```python
+from experiments.generators import run
+metrics = run(seed=42, output_dir=output_dir, config=flattened_config)
+```
+
+## Controls and data contract
+
+Controls include rhythm family, motif sequence, tempo/ramp, swing, microtiming jitter,
+push/pull, density, fills, dropout, accents, and timbre labels. Every sampled value is
+recorded in the Parquet row; latent controls are never used as model inputs here.
+
+`events_json` is an ordered list of events with step-domain time, instrument, velocity,
+timbre, and instantaneous tempo. Parquet schema metadata contains `schema_version=1.0`.
+The WAV files are audition previews; Parquet is the canonical dataset. See
+[`docs/method.md`](docs/method.md) for generation and evaluation details.
+
+## Development
+
+```bash
+uv run --extra test pytest -q
+```
+
+Generated corpora are ignored because a default run is about 62 MB. Distribute corpora
+through a release or dataset store together with their manifest, not in Git history.
+
+MIT licensed.

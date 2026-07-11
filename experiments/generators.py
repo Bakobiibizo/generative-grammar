@@ -9,8 +9,11 @@ inside this project.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import random
+import struct
+import wave
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +53,8 @@ class _ClipConfig:
     dropout_min: float
     dropout_max: float
     instrument_timbre_variants: int
+    render_audio: bool
+    sample_rate: int
 
 
 @dataclass(frozen=True)
@@ -140,7 +145,7 @@ def _parse_config(config: dict[str, str] | None) -> _ClipConfig:
         if str(v).strip()
     ]
 
-    return _ClipConfig(
+    parsed = _ClipConfig(
         seed_list=seed_list,
         families=_coerce_scalar(get("grammar.families"), int, 4),
         motifs_per_family=_coerce_scalar(get("grammar.motifs_per_family"), int, 10),
@@ -165,7 +170,34 @@ def _parse_config(config: dict[str, str] | None) -> _ClipConfig:
         instrument_timbre_variants=_coerce_scalar(
             get("grammar.instrument_timbre_variants"), int, 3
         ),
+        render_audio=_coerce_scalar(get("grammar.render_audio"), bool, True),
+        sample_rate=_coerce_scalar(get("grammar.sample_rate"), int, 22050),
     )
+    if parsed.sample_count < 1:
+        raise ValueError("grammar.sample_count must be at least 1")
+    if parsed.phrase_bars < 1 or parsed.motifs_per_family < 1:
+        raise ValueError("phrase_bars and motifs_per_family must be at least 1")
+    if parsed.tempo_min <= 0 or parsed.tempo_max < parsed.tempo_min:
+        raise ValueError("tempo range must be positive and ordered")
+    if not 0 <= parsed.density_min <= parsed.density_max <= 1:
+        raise ValueError("density range must be within [0, 1]")
+    if parsed.sample_rate < 8000:
+        raise ValueError("sample_rate must be at least 8000")
+    return parsed
+
+
+def flatten_config(config: dict[str, Any], prefix: str = "") -> dict[str, str]:
+    """Convert a nested YAML mapping to the harness' dotted-key contract."""
+    flattened: dict[str, str] = {}
+    for key, value in config.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            flattened.update(flatten_config(value, path))
+        elif isinstance(value, list):
+            flattened[path] = ",".join(str(item) for item in value)
+        else:
+            flattened[path] = str(value)
+    return flattened
 
 
 def _normalize_motif(motif: dict[str, list[int]]) -> dict[str, list[int]]:
@@ -394,6 +426,54 @@ def _entropy(values: list[str]) -> float:
     return float(-np.sum(probs * np.log2(probs + 1e-12)))
 
 
+SCHEMA_VERSION = "1.0"
+EVALUATION_THRESHOLDS = {
+    "h_generate_valid_rate": 0.99,
+    "h_generate_event_density": 0.04,
+    "h_generate_event_entropy": 1.4,
+    "h_generate_motif_reuse": 0.12,
+    "h_generate_family_coverage": 0.75,
+}
+
+
+def _render_wav(events: list[dict[str, Any]], path: Path, sample_rate: int) -> None:
+    """Render a dependency-free audition waveform; metadata remains canonical."""
+    if not events:
+        raise ValueError("cannot render an empty clip")
+    seconds_per_step = 60.0 / max(1.0, float(events[0]["tempo_bpm"])) / STEP_PER_BEAT
+    duration = (max(float(event["time"]) for event in events) + 2.0) * seconds_per_step
+    samples = np.zeros(max(1, int(duration * sample_rate)), dtype=np.float64)
+    frequencies = {"kick": 80.0, "snare": 180.0, "hat": 7000.0, "clap": 1100.0}
+    click_len = max(1, int(0.04 * sample_rate))
+    t = np.arange(click_len) / sample_rate
+    envelope = np.exp(-t * 75.0)
+    for event in events:
+        start = max(0, int(float(event["time"]) * seconds_per_step * sample_rate))
+        end = min(len(samples), start + click_len)
+        if end <= start:
+            continue
+        tone = np.sin(2 * math.pi * frequencies[event["instrument"]] * t[: end - start])
+        samples[start:end] += tone * envelope[: end - start] * float(event["velocity"]) * 0.35
+    peak = float(np.max(np.abs(samples)))
+    if peak > 0.98:
+        samples *= 0.98 / peak
+    pcm = (samples * 32767).astype("<i2")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(pcm.tobytes())
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run(seed: int, output_dir: Path, config: dict[str, str] | None = None) -> dict[str, Any]:
     cfg = _parse_config(config)
     rng = random.Random(seed)
@@ -471,8 +551,11 @@ def run(seed: int, output_dir: Path, config: dict[str, str] | None = None) -> di
         }
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pylist(rows)
-    pq.write_table(table, output_dir / f"rhythm_samples_seed_{seed}.parquet")
+    table = pa.Table.from_pylist(rows).replace_schema_metadata(
+        {"schema_version": SCHEMA_VERSION, "generator": "generative-grammar"}
+    )
+    parquet_path = output_dir / f"rhythm_samples_seed_{seed}.parquet"
+    pq.write_table(table, parquet_path, compression="zstd")
 
     valid_rate = float(np.mean(valid_rates))
     density = float(np.mean(densities))
@@ -480,7 +563,7 @@ def run(seed: int, output_dir: Path, config: dict[str, str] | None = None) -> di
     motif_reuse = float(np.mean(motif_reuses))
     family_coverage = len(family_hits) / max(1.0, len(families))
 
-    return {
+    metrics = {
         "seed": seed,
         "h_generate_valid_rate": valid_rate,
         "h_generate_event_density": density,
@@ -489,3 +572,30 @@ def run(seed: int, output_dir: Path, config: dict[str, str] | None = None) -> di
         "h_generate_family_coverage": family_coverage,
         "h_generate_sample_count": cfg.sample_count,
     }
+    threshold_results = {
+        name: metrics[name] >= minimum for name, minimum in EVALUATION_THRESHOLDS.items()
+    }
+    metrics["thresholds_passed"] = all(threshold_results.values())
+
+    audio_files: list[str] = []
+    if cfg.render_audio:
+        for row in rows:
+            relative = Path("audio") / f"clip_{row['sample_idx']:06d}.wav"
+            _render_wav(json.loads(row["events_json"]), output_dir / relative, cfg.sample_rate)
+            audio_files.append(relative.as_posix())
+
+    files = [parquet_path, *(output_dir / item for item in audio_files)]
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "seed": seed,
+        "sample_count": cfg.sample_count,
+        "audio_files": audio_files,
+        "metrics": metrics,
+        "thresholds": EVALUATION_THRESHOLDS,
+        "threshold_results": threshold_results,
+        "files": {path.relative_to(output_dir).as_posix(): _sha256(path) for path in files},
+    }
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return metrics

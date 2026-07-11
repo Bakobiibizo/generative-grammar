@@ -41,3 +41,7 @@ grammar:
 
   # Timbre variants for metadata logging.
   instrument_timbre_variants: 3
+
+  # WAV files are deterministic audition renders; Parquet metadata is canonical.
+  render_audio: true
+  sample_rate: 22050
